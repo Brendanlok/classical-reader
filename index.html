@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>四大名著 · Four Great Classical Novels</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Toolbar offset for sticky nav — JS updates this when breadcrumb row shows */
+    body { padding-top: 52px; }
+  </style>
+</head>
+<body>
+
+<!-- Fixed toolbar for view toggle -->
+<div id="toolbar"></div>
+<!-- Chapter reading progress bar (bottom) -->
+<div id="reading-progress-bar">
+  <div id="reading-progress-fill"></div>
+  <span id="reading-progress-pct" class="bc-progress-pct">0%</span>
+</div>
+
+<!-- App shell -->
+<div id="app-wrapper">
+  <div id="app-frame">
+
+    <!-- Header -->
+    <header id="main-header">
+      <h1>四大名著</h1>
+      <p>Four Great Classical Novels of Chinese Literature</p>
+    </header>
+
+    <!-- Nav tabs -->
+    <nav id="nav-tabs"></nav>
+
+    <!-- Main content -->
+    <main id="content"></main>
+
+    <!-- Footer -->
+    <footer id="app-footer"></footer>
+
+  </div>
+</div>
+
+<!-- Firebase SDK (compat CDN — works without a bundler) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+<script src="data.js"></script>
+<script src="chapters.js"></script>
+<script src="user.js"></script>
+<script src="app.js"></script>
+
+<!-- AI Companion -->
+<div id="ai-companion-root"></div>
+</body>
+</html>
