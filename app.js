@@ -245,6 +245,38 @@ async function fetchWenyan(bookId, chapterIdx) {
   finally { _fetching.delete(key); render(); }
 }
 
+/* ══ PROPER NOUN ANNOTATION (EN only) — append original 繁体 in brackets ══ */
+const COMMON_SURNAMES = '趙錢孫李周吳鄭王馮陳褚衛蔣沈韓楊朱秦尤許何呂施張孔曹嚴華金魏陶姜戚謝鄒喻柏水竇章雲蘇潘葛奚范彭郎魯韋昌馬苗鳳花方俞任袁柳酆鮑史唐費廉岑薛雷賀倪湯滕殷羅畢郝鄔安常樂於時傅皮卞齊康伍余元卜顧孟平黃和穆蕭尹姚邵汪祁毛禹狄米貝明臧計伏成戴談宋茅龐熊紀舒屈項祝董梁杜阮藍閔席季麻強賈路婁危江童顏郭梅盛林刁鍾徐邱駱高夏蔡田樊胡凌霍虞萬支柯昝管盧莫經房裘繆干解應宗丁宣賁鄧郁單杭洪包諸左石崔吉鈕龔程嵇邢滑裴陸榮翁荀羊於惠甄麴家封芮羿儲靳汲邴糜松井段富巫烏焦巴弓牧隗山谷車侯宓蓬全郗班仰秋仲伊宮寧仇欒暴甘鈄厲戎祖武符劉景詹束龍葉幸司韶郜黎薊薄印宿白懷蒲邰從鄂索咸籍賴卓藺屠蒙池喬陰鬱胥能蒼雙聞莘黨翟譚貢勞逄姬申扶堵冉宰酈雍卻璩桑桂濮牛壽通邊扈燕冀郟浦尚農溫別莊晏柴瞿閻充慕連茹習宦艾魚容向古易慎戈廖庾終暨居衡步都耿滿弘匡國文寇廣祿闕東歐殳沃利蔚越夔隆師鞏厙聶晁勾敖融冷訾辛闞那簡饒空曾毋沙乜養鞠須豐巢關蒯相查后荊紅游竺權逯蓋益桓公';
+
+function extractNameCandidates(wenyan) {
+  const re = new RegExp(`[${COMMON_SURNAMES}][\\u4e00-\\u9fa5]{1,2}`, 'g');
+  const counts = {};
+  let m;
+  while ((m = re.exec(wenyan))) counts[m[0]] = (counts[m[0]] || 0) + 1;
+  return Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 25);
+}
+
+async function annotateNames(wenyan, englishText) {
+  try {
+    const candidates = extractNameCandidates(wenyan);
+    if (!candidates.length) return englishText;
+    const translated = await gtranslate(candidates.join('\n'), 'en');
+    const englishNames = translated.split('\n').map(s => s.trim()).filter(Boolean);
+    let annotated = englishText;
+    candidates.forEach((cn, i) => {
+      const en = englishNames[i];
+      if (!en || en.length < 2 || !/^[A-Z]/.test(en)) return;
+      const escaped = en.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`\\b${escaped}\\b`);
+      if (re.test(annotated)) annotated = annotated.replace(re, `${en}（${cn}）`);
+    });
+    return annotated;
+  } catch (e) {
+    console.warn('Name annotation failed:', e);
+    return englishText;
+  }
+}
+
 /* ══ TRANSLATION (Google Translate → Firestore permanent cache) ══ */
 async function fetchTranslation(cacheType, bookId, chapterIdx) {
   const key = cacheKey(cacheType, bookId, chapterIdx);
@@ -266,7 +298,12 @@ async function fetchTranslation(cacheType, bookId, chapterIdx) {
 
     // 3. Translate via Google Translate (free, no key)
     const targetLang = cacheType === 'en' ? 'en' : 'zh-CN';
-    const result = await gtranslate(wenyan, targetLang);
+    let result = await gtranslate(wenyan, targetLang);
+
+    // For English, annotate proper nouns with original 繁体 in brackets
+    if (cacheType === 'en' && result) {
+      result = await annotateNames(wenyan, result);
+    }
 
     if (result && result.trim().length > 50) {
       setCached(cacheType, bookId, chapterIdx, result);
@@ -2031,12 +2068,44 @@ async function applyOneTimeCacheFixes() {
   }
 }
 
+/* ══ ONE-TIME GLOBAL WIPE: clear all cached EN translations so they
+   regenerate with proper-noun annotations (繁体 in brackets). Runs once
+   ever, server-side gated via a Firestore marker doc — not per device,
+   so it doesn't repeat for every visitor. ══ */
+async function wipeAllEnglishCacheOnce() {
+  if (typeof _db === 'undefined' || !_db) return;
+  const MARKER_ID = 'enWipeV1';
+  try {
+    const markerRef = _db.collection('chapter_cache_meta').doc(MARKER_ID);
+    const marker = await markerRef.get();
+    if (marker.exists) return; // already done by someone else
+
+    // Claim the marker first so concurrent visitors don't double-run
+    await markerRef.set({ startedAt: new Date().toISOString() });
+
+    const snap = await _db.collection('chapter_cache').where('en', '!=', null).get();
+    const docs = snap.docs.filter(d => d.data().en);
+    let batch = _db.batch();
+    let count = 0;
+    for (const d of docs) {
+      batch.update(d.ref, { en: firebase.firestore.FieldValue.delete() });
+      count++;
+      if (count % 450 === 0) { await batch.commit(); batch = _db.batch(); }
+    }
+    if (count % 450 !== 0) await batch.commit();
+    console.log(`Wiped EN cache for ${count} chapters — will regenerate with name annotations.`);
+  } catch (e) {
+    console.warn('EN cache wipe failed:', e);
+  }
+}
+
 /* ══ INIT ══ */
 document.addEventListener('DOMContentLoaded', () => {
   mergeChapters();
   render();
   renderCompanion();
   applyOneTimeCacheFixes(); // background fix for known bad cache entries
+  wipeAllEnglishCacheOnce(); // one-time global EN cache reset for name annotations
   window.addEventListener('scroll', updateReadingProgress, { passive: true });
 });
 
