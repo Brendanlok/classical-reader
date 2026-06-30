@@ -112,19 +112,48 @@ function wsPage(bookId, chapterIdx) {
   return `${WS_TITLES[bookId]}/第${num}回`;
 }
 
+/* Resolve MediaWiki "-{...}-" language-variant syntax (used heavily in
+   Dream of the Red Chamber's wikitext), keeping the last/most relevant
+   segment instead of the raw markup. Must run BEFORE template stripping —
+   the single braces inside -{...}- confuse the {{...}} brace-counting regex. */
+function resolveVariantSyntax(text) {
+  return text.replace(/-\{([^{}]*)\}-/g, (_, inner) => {
+    const noPipePrefix = inner.includes('|') ? inner.split('|').pop() : inner;
+    const segs = noPipePrefix.split(';').map(s => s.trim()).filter(Boolean);
+    const last = segs[segs.length - 1] || '';
+    return last.includes(':') ? last.split(':').pop() : last;
+  });
+}
+
+/* Strip/unwrap {{...}} templates with unlimited nesting depth. Pure short
+   metadata templates (e.g. {{回目录}}) are deleted; templates whose body
+   looks like wrapped prose (has a pipe/colon and longer text) are unwrapped
+   to their last parameter instead of being deleted outright, so real
+   chapter content (e.g. author's preface) isn't lost. */
+function stripTemplates(text) {
+  let prev;
+  do {
+    prev = text;
+    text = text.replace(/\{\{([^{}]*)\}\}/g, (_, body) => {
+      if (!body.includes('|') && !body.includes(':') && body.length <= 8) return '';
+      const parts = body.split(/[|:]/);
+      return parts[parts.length - 1];
+    });
+  } while (text !== prev);
+  return text;
+}
+
 function cleanWikitext(raw) {
-  return raw
+  let text = resolveVariantSyntax(raw)
     .replace(/<\/?onlyinclude>/gi, '')
     .replace(/<\/?includeonly>/gi, '')
     .replace(/<noinclude>[\s\S]*?<\/noinclude>/gi, '')
-    // Poem blocks: each line becomes its own paragraph
     .replace(/<poem>([\s\S]*?)<\/poem>/gi, (_, content) =>
       '\n\n' + content.split('\n').filter(l => l.trim()).map(l => l.trim()).join('\n\n') + '\n\n'
     )
-    .replace(/<[^>]+>/g, '')
-    // nested templates
-    .replace(/\{\{[^{}]*\{\{[^{}]*\}\}[^{}]*\}\}/g, '')
-    .replace(/\{\{[^{}]*\}\}/g, '')
+    .replace(/<[^>]+>/g, '');
+  text = stripTemplates(text);
+  return text
     .replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, '$1')
     .replace(/\[[^\]]*\s([^\]]*)\]/g, '$1')
     .replace(/'{2,3}/g, '')
@@ -132,6 +161,12 @@ function cleanWikitext(raw) {
     .replace(/__[A-Z]+__/g, '')
     .replace(/\[\[分類:[^\]]*\]\]/g, '')
     .replace(/\[\[Category:[^\]]*\]\]/g, '')
+    // Strip Wikisource chapter-nav junk (上一回/回目录/下一回 clusters, optionally
+    // followed by a "----" separator). Not line-anchored — the nav links often
+    // sit inline with the chapter content with no newline in between.
+    .replace(/[　\s]*(?:(?:上一回|下一回|回目录|目录)[　\s]*){1,4}-{2,}[　\s]*/g, '')
+    .replace(/(?:(?:上一回|下一回|回目录|目录)[　\s]*){2,4}/g, '')
+    .replace(/-{3,}/g, '')
     // Strip leading em-spaces/whitespace per line (CSS handles indent)
     .replace(/^[　\t ]+/gm, '')
     // Replace mid-line sequences of em-spaces with a line break (paired couplets)
@@ -248,12 +283,18 @@ async function fetchWenyan(bookId, chapterIdx) {
 /* ══ PROPER NOUN ANNOTATION (EN only) — append original 繁体 in brackets ══ */
 const COMMON_SURNAMES = '趙錢孫李周吳鄭王馮陳褚衛蔣沈韓楊朱秦尤許何呂施張孔曹嚴華金魏陶姜戚謝鄒喻柏水竇章雲蘇潘葛奚范彭郎魯韋昌馬苗鳳花方俞任袁柳酆鮑史唐費廉岑薛雷賀倪湯滕殷羅畢郝鄔安常樂於時傅皮卞齊康伍余元卜顧孟平黃和穆蕭尹姚邵汪祁毛禹狄米貝明臧計伏成戴談宋茅龐熊紀舒屈項祝董梁杜阮藍閔席季麻強賈路婁危江童顏郭梅盛林刁鍾徐邱駱高夏蔡田樊胡凌霍虞萬支柯昝管盧莫經房裘繆干解應宗丁宣賁鄧郁單杭洪包諸左石崔吉鈕龔程嵇邢滑裴陸榮翁荀羊於惠甄麴家封芮羿儲靳汲邴糜松井段富巫烏焦巴弓牧隗山谷車侯宓蓬全郗班仰秋仲伊宮寧仇欒暴甘鈄厲戎祖武符劉景詹束龍葉幸司韶郜黎薊薄印宿白懷蒲邰從鄂索咸籍賴卓藺屠蒙池喬陰鬱胥能蒼雙聞莘黨翟譚貢勞逄姬申扶堵冉宰酈雍卻璩桑桂濮牛壽通邊扈燕冀郟浦尚農溫別莊晏柴瞿閻充慕連茹習宦艾魚容向古易慎戈廖庾終暨居衡步都耿滿弘匡國文寇廣祿闕東歐殳沃利蔚越夔隆師鞏厙聶晁勾敖融冷訾辛闞那簡饒空曾毋沙乜養鞠須豐巢關蒯相查后荊紅游竺權逯蓋益桓公';
 
+// Common place-name suffixes (山/寺/府/園/樓 etc.) — catches places and
+// nicknames that don't follow the surname+given-name pattern (大觀園, 花果山…)
+const PLACE_SUFFIXES = '山寺莊村府院館樓園城關州縣湖江河洞殿宮塔峰峽渡鎮坡崗泊澗谷潭灘庵觀塢嶺峒窟祠廟';
+
 function extractNameCandidates(wenyan) {
-  const re = new RegExp(`[${COMMON_SURNAMES}][\\u4e00-\\u9fa5]{1,2}`, 'g');
+  const surnameRe = new RegExp(`[${COMMON_SURNAMES}][\\u4e00-\\u9fa5]{1,2}`, 'g');
+  const placeRe = new RegExp(`[\\u4e00-\\u9fa5]{1,3}[${PLACE_SUFFIXES}]`, 'g');
   const counts = {};
   let m;
-  while ((m = re.exec(wenyan))) counts[m[0]] = (counts[m[0]] || 0) + 1;
-  return Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 25);
+  while ((m = surnameRe.exec(wenyan))) counts[m[0]] = (counts[m[0]] || 0) + 1;
+  while ((m = placeRe.exec(wenyan))) counts[m[0]] = (counts[m[0]] || 0) + 1;
+  return Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 40);
 }
 
 async function annotateNames(wenyan, englishText) {
@@ -2099,6 +2140,64 @@ async function wipeAllEnglishCacheOnce() {
   }
 }
 
+/* Strip Wikisource chapter-nav junk (上一回/回目录/下一回, "----" separators)
+   AND residual unparsed markup (-{...}- variant syntax, {{...}} templates)
+   from already-cached plain text. Mirrors cleanWikitext()'s logic so cached
+   text that was fetched before that parser was fixed gets cleaned too. */
+function stripNavJunk(text) {
+  if (!text) return text;
+  let t = resolveVariantSyntax(text);
+  t = stripTemplates(t);
+  return t
+    // Not line-anchored — nav links often sit inline with content, no newline between them
+    .replace(/[　\s]*(?:(?:上一回|下一回|回目录|目录)[　\s]*){1,4}-{2,}[　\s]*/g, '')
+    .replace(/(?:(?:上一回|下一回|回目录|目录)[　\s]*){2,4}/g, '')
+    .replace(/-{3,}/g, '')
+    .replace(/Previous episode.*Next episode.*$/gim, '')
+    .replace(/Return to table of contents/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/* ══ ONE-TIME GLOBAL WIPE: remove Wikisource nav-link junk (上一回/回目录/
+   下一回, "----" separators) that got scraped into ws and baked into every
+   translation. Cleans ws in place, deletes bh/en so they regenerate clean.
+   Runs once ever across all 4 books, gated via a Firestore marker doc. ══ */
+async function wipeNavJunkOnce() {
+  if (typeof _db === 'undefined' || !_db) return;
+  const MARKER_ID = 'navWipeV3'; // bumped — v2 didn't handle -{...}- variant syntax breaking {{...}} template parsing
+  try {
+    const markerRef = _db.collection('chapter_cache_meta').doc(MARKER_ID);
+    const marker = await markerRef.get();
+    if (marker.exists) return; // already done by someone else
+
+    await markerRef.set({ startedAt: new Date().toISOString() });
+
+    const snap = await _db.collection('chapter_cache').get();
+    let batch = _db.batch();
+    let count = 0;
+    for (const d of snap.docs) {
+      const data = d.data();
+      const update = {};
+      if (data.ws) {
+        const cleaned = stripNavJunk(data.ws);
+        if (cleaned !== data.ws) update.ws = cleaned;
+      }
+      if (data.bh) update.bh = firebase.firestore.FieldValue.delete();
+      if (data.en) update.en = firebase.firestore.FieldValue.delete();
+      if (Object.keys(update).length) {
+        batch.update(d.ref, update);
+        count++;
+        if (count % 450 === 0) { await batch.commit(); batch = _db.batch(); }
+      }
+    }
+    if (count % 450 !== 0) await batch.commit();
+    console.log(`Cleaned nav-junk for ${count} chapters across all books.`);
+  } catch (e) {
+    console.warn('Nav-junk wipe failed:', e);
+  }
+}
+
 /* ══ INIT ══ */
 document.addEventListener('DOMContentLoaded', () => {
   mergeChapters();
@@ -2106,6 +2205,7 @@ document.addEventListener('DOMContentLoaded', () => {
   renderCompanion();
   applyOneTimeCacheFixes(); // background fix for known bad cache entries
   wipeAllEnglishCacheOnce(); // one-time global EN cache reset for name annotations
+  wipeNavJunkOnce(); // one-time global cleanup of scraped Wikisource nav links
   window.addEventListener('scroll', updateReadingProgress, { passive: true });
 });
 
