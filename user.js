@@ -255,6 +255,8 @@ function signInWithGoogle() {
       _auth.signInWithRedirect(provider);
     } else if (e.code === 'auth/unauthorized-domain') {
       alert('Sign-in failed: add "' + location.hostname + '" to Firebase Console → Authentication → Settings → Authorized domains.');
+    } else if (e.code === 'auth/operation-not-supported-in-this-environment') {
+      alert('Sign-in blocked by your browser: a privacy/ad-blocking extension may be restricting storage access for this site. Try disabling extensions for this page, or use a different browser profile.');
     } else if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
       alert('Sign-in error: ' + e.message);
     }
