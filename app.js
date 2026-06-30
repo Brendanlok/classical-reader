@@ -2115,7 +2115,7 @@ async function applyOneTimeCacheFixes() {
    so it doesn't repeat for every visitor. ══ */
 async function wipeAllEnglishCacheOnce() {
   if (typeof _db === 'undefined' || !_db) return;
-  const MARKER_ID = 'enWipeV1';
+  const MARKER_ID = 'enWipeV2'; // bumped — v1 only matched surname-pattern names, v2 also catches places/nicknames
   try {
     const markerRef = _db.collection('chapter_cache_meta').doc(MARKER_ID);
     const marker = await markerRef.get();
