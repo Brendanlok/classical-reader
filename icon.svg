@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#8B1A1A"/>
+  <g fill="none" stroke="#F5E6C8" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M256 152 C 200 128, 130 128, 100 148 L 100 372 C 130 352, 200 352, 256 376 C 312 352, 382 352, 412 372 L 412 148 C 382 128, 312 128, 256 152 Z"/>
+    <path d="M256 152 L 256 376"/>
+  </g>
+  <text x="256" y="470" font-family="Georgia, 'Noto Serif SC', serif" font-size="56" font-weight="700" fill="#F5E6C8" text-anchor="middle">四大名著</text>
+</svg>

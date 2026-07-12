@@ -2,8 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>四大名著 · Four Great Classical Novels</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#8B1A1A">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="四大名著">
+
   <link rel="stylesheet" href="styles.css">
   <style>
     /* Toolbar offset for sticky nav — JS updates this when breadcrumb row shows */
@@ -54,5 +65,13 @@
 
 <!-- AI Companion -->
 <div id="ai-companion-root"></div>
+
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
+</script>
 </body>
 </html>

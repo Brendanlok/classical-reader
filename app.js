@@ -130,17 +130,36 @@ function resolveVariantSyntax(text) {
    looks like wrapped prose (has a pipe/colon and longer text) are unwrapped
    to their last parameter instead of being deleted outright, so real
    chapter content (e.g. author's preface) isn't lost. */
+// Pure structural/metadata templates (Wikisource page headers, nav boxes,
+// category tags) — delete entirely, never unwrap. Unwrapping these leaks
+// raw field names like "notes = " as visible text, since they have no
+// single meaningful "last parameter" the way a formatting wrapper does.
+const METADATA_TEMPLATE_NAMES = new Set(['header', 'navigation', 'nav', 'pagequality']);
+
 function stripTemplates(text) {
   let prev;
   do {
     prev = text;
     text = text.replace(/\{\{([^{}]*)\}\}/g, (_, body) => {
+      const name = body.trim().match(/^([^\n|]+)/)?.[1]?.trim().toLowerCase() || '';
+      if (METADATA_TEMPLATE_NAMES.has(name)) return '';
       if (!body.includes('|') && !body.includes(':') && body.length <= 8) return '';
       const parts = body.split(/[|:]/);
       return parts[parts.length - 1];
     });
   } while (text !== prev);
   return text;
+}
+
+// MediaWiki's leading ":" is indent/blockquote syntax, commonly used on
+// Wikisource for poem/verse lines as an alternative to <poem> tags. Convert
+// consecutive ":"-prefixed lines into their own paragraphs, colons stripped,
+// so they render like the <poem>-tag poems do (one line per paragraph).
+function convertColonPoemLines(text) {
+  return text.replace(/(?:^|\n)((?::[^\n]*\n?){2,})/g, (m, block) => {
+    const lines = block.split('\n').map(l => l.replace(/^:+\s*/, '').trim()).filter(Boolean);
+    return lines.length ? '\n\n' + lines.join('\n\n') + '\n\n' : m;
+  });
 }
 
 function cleanWikitext(raw) {
@@ -152,6 +171,7 @@ function cleanWikitext(raw) {
       '\n\n' + content.split('\n').filter(l => l.trim()).map(l => l.trim()).join('\n\n') + '\n\n'
     )
     .replace(/<[^>]+>/g, '');
+  text = convertColonPoemLines(text);
   text = stripTemplates(text);
   return text
     .replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, '$1')
@@ -175,17 +195,27 @@ function cleanWikitext(raw) {
     .trim();
 }
 
-const CACHE_VER = 'v3'; // bump to invalidate stale text
+const CACHE_VER = 'v4';
 function cacheKey(type, bookId, chapterIdx) {
   return `${type}_${CACHE_VER}_${bookId}_${chapterIdx}`;
 }
 
+/* In-memory cache for chapter text (繁体/简体/EN), NOT localStorage.
+   Firestore is already the permanent shared cache across all users and
+   devices; localStorage was a redundant local optimization that filled its
+   ~5-10MB quota after preloading all ~448 chapters, after which every write
+   silently failed and the app could never satisfy its own cache checks —
+   causing an infinite fetch loop that looked like a stuck spinner. An
+   in-memory Map has no such quota (bounded only by RAM) and still resets
+   naturally on reload, which is fine since Firestore is the source of truth. */
+const _memCache = new Map();
+
 function getCached(type, bookId, chapterIdx) {
-  try { return localStorage.getItem(cacheKey(type, bookId, chapterIdx)); } catch { return null; }
+  return _memCache.get(cacheKey(type, bookId, chapterIdx)) || null;
 }
 
 function setCached(type, bookId, chapterIdx, text) {
-  try { localStorage.setItem(cacheKey(type, bookId, chapterIdx), text); } catch {}
+  _memCache.set(cacheKey(type, bookId, chapterIdx), text);
 }
 
 /* ══ FIRESTORE SHARED TRANSLATION CACHE ══
@@ -255,7 +285,7 @@ async function gtranslate(text, targetLang) {
   return parts.join('\n\n');
 }
 
-/* ══ WENYAN FETCH (Wikisource) ══ */
+/* ══ WENYAN FETCH (Firestore shared cache first, Wikisource as fallback) ══ */
 async function fetchWenyan(bookId, chapterIdx) {
   const key = cacheKey('ws', bookId, chapterIdx);
   if (_fetching.has(key)) return;
@@ -263,6 +293,11 @@ async function fetchWenyan(bookId, chapterIdx) {
   _fetching.add(key);
   render();
   try {
+    // 1. Check Firestore — another user may have already fetched this chapter
+    await fsLoadCache(bookId, chapterIdx);
+    if (getCached('ws', bookId, chapterIdx)) return; // got it from cloud cache
+
+    // 2. Not cached anywhere — fetch from Wikisource directly
     const page = wsPage(bookId, chapterIdx);
     const url = `https://zh.wikisource.org/w/api.php?action=parse&page=${encodeURIComponent(page)}&prop=wikitext&format=json&origin=*`;
     const controller = new AbortController();
@@ -274,10 +309,15 @@ async function fetchWenyan(bookId, chapterIdx) {
     if (raw) {
       const clean = cleanWikitext(raw);
       setCached('ws', bookId, chapterIdx, clean);
-      fsSaveCache(bookId, chapterIdx, 'ws', clean);
-    } else console.warn('Wikisource: no wikitext for', page);
-  } catch(e) { console.warn('Wikisource fetch failed:', e.message); }
-  finally { _fetching.delete(key); render(); }
+      fsSaveCache(bookId, chapterIdx, 'ws', clean); // save permanently so no one fetches it again
+    } else {
+      console.warn('Wikisource: no wikitext for', page);
+      _failed.add(key);
+    }
+  } catch(e) {
+    console.warn('Wikisource fetch failed:', e.message);
+    _failed.add(key);
+  } finally { _fetching.delete(key); render(); }
 }
 
 /* ══ PROPER NOUN ANNOTATION (EN only) — append original 繁体 in brackets ══ */
@@ -466,6 +506,45 @@ const UI = {
 };
 const t = k => UI[state.lang][k] ?? k;
 
+/* ══ URL ROUTING (deep links + browser back/forward) ══ */
+function buildURLFromState() {
+  const params = new URLSearchParams();
+  if (state.page && state.page !== 'home') params.set('page', state.page);
+  if (state.book) params.set('book', state.book);
+  if (state.page === 'reader' && state.chapter !== null && state.chapter !== undefined) {
+    params.set('ch', state.chapter);
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : location.pathname;
+}
+
+function pushURLState() {
+  const url = buildURLFromState();
+  if (location.search !== new URL(url, location.href).search) {
+    history.pushState({ page: state.page, book: state.book, chapter: state.chapter }, '', url);
+  }
+}
+
+function applyStateFromURL() {
+  const params = new URLSearchParams(location.search);
+  state.page = params.get('page') || 'home';
+  state.book = params.get('book') || null;
+  const chStr = params.get('ch');
+  state.chapter = chStr !== null && chStr !== '' ? parseInt(chStr, 10) : null;
+  state.reachedEnd = false;
+
+  // Guard against malformed/hand-edited URLs pointing at a nonexistent book
+  if (state.book && !BOOKS[state.book]) { state.page = 'home'; state.book = null; state.chapter = null; }
+  render();
+  window.scrollTo(0, 0);
+  updateReadingProgress();
+  const frame = document.getElementById('app-frame');
+  if (frame) frame.scrollTop = 0;
+  if (state.page === 'reader' && state.book && state.chapter !== null) {
+    _prefetchAdjacent(state.book, state.chapter);
+  }
+}
+
 /* ══ NAVIGATION ══ */
 function nav(page, bookId, chapterIdx) {
   // Mark chapter complete when leaving if user reached the end
@@ -510,6 +589,8 @@ function nav(page, bookId, chapterIdx) {
   if (page === 'reader' && state.book && state.chapter !== null) {
     _prefetchAdjacent(state.book, state.chapter);
   }
+
+  pushURLState();
 }
 
 function _prefetchAdjacent(bookId, chapterIdx) {
@@ -1790,6 +1871,36 @@ async function confirmReset() {
   nav('home', null, null);
 }
 
+async function resetBookData(bookId) {
+  const isZh = state.lang === 'zh';
+  const b = BOOKS[bookId];
+  const bookName = isZh ? b.title : b.subtitle;
+  const msg = isZh
+    ? `确定要重置《${bookName}》的阅读进度、书签和笔记吗？此操作无法撤销。`
+    : `Reset all reading progress, bookmarks, and notes for "${bookName}"? This cannot be undone.`;
+  if (!confirm(msg)) return;
+
+  if (typeof USER !== 'undefined') {
+    delete USER.progress[bookId];
+    delete USER.startedChapters[bookId];
+    delete USER.completedChapters[bookId];
+    delete USER.bookmarks[bookId];
+    // Notes/highlights are keyed "bookId_chapterIdx" — remove all entries for this book
+    Object.keys(USER.notes || {}).forEach(k => { if (k.startsWith(`${bookId}_`)) delete USER.notes[k]; });
+    Object.keys(USER.highlights || {}).forEach(k => { if (k.startsWith(`${bookId}_`)) delete USER.highlights[k]; });
+    if (typeof saveLocalData === 'function') saveLocalData();
+    if (typeof saveCloudData === 'function') saveCloudData();
+  }
+
+  const toast = document.createElement('div');
+  toast.className = 'reset-toast';
+  toast.textContent = isZh ? `✓《${bookName}》数据已重置` : `✓ ${bookName} data reset`;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+
+  render();
+}
+
 function confirmSignOut() {
   const isZh = state.lang === 'zh';
   if (confirm(isZh ? '确定要退出登录吗？' : 'Sign out of your account?')) {
@@ -1849,7 +1960,10 @@ function renderLibrary() {
       return `<div class="lib-progress-card" onclick="${idx>=0?`nav('reader','${b.id}',${idx})`:`nav('book-hub','${b.id}')`}">
         <div class="lib-pc-color" style="background:${b.color}"></div>
         <div class="lib-pc-body">
-          <div class="lib-pc-title">${isZh ? b.title : b.subtitle}</div>
+          <div class="lib-pc-title-row">
+            <div class="lib-pc-title">${isZh ? b.title : b.subtitle}</div>
+            ${(idx >= 0 || done > 0) ? `<button class="lib-pc-reset-btn" onclick="event.stopPropagation();resetBookData('${b.id}')" title="${isZh?'重置本书数据':'Reset data for this book'}">↺ ${isZh?'重置':'Reset'}</button>` : ''}
+          </div>
           <div class="lib-pc-last">${idx >= 0 ? `${isZh?'上次读到':'Last read'}: ${chLabel}` : chLabel}</div>
           <div class="lib-pc-bar-wrap"><div class="lib-pc-bar" style="width:${total?Math.round((done/total)*100):0}%;background:${b.color}"></div></div>
           <div class="lib-pc-pct">${done > 0 ? `${done} / ${total} ${isZh?'章节已完成':'chapters completed'}` : ''}</div>
@@ -2115,7 +2229,7 @@ async function applyOneTimeCacheFixes() {
    so it doesn't repeat for every visitor. ══ */
 async function wipeAllEnglishCacheOnce() {
   if (typeof _db === 'undefined' || !_db) return;
-  const MARKER_ID = 'enWipeV2'; // bumped — v1 only matched surname-pattern names, v2 also catches places/nicknames
+  const MARKER_ID = 'enWipeV3'; // bumped — forcing a fresh full wipe now that deploys are reliably reaching production
   try {
     const markerRef = _db.collection('chapter_cache_meta').doc(MARKER_ID);
     const marker = await markerRef.get();
@@ -2155,6 +2269,17 @@ function stripNavJunk(text) {
     .replace(/-{3,}/g, '')
     .replace(/Previous episode.*Next episode.*$/gim, '')
     .replace(/Return to table of contents/gi, '')
+    // Residual damage from an already-corrupted cache entry: the {{header}}
+    // template's braces are gone (a prior parser bug already unwrapped it),
+    // leaving bare leaked field text like "notes\n\n= \n\n" at the very
+    // start. Strip it directly since there's no {{...}} left to re-parse.
+    .replace(/^\s*notes\s*\n+\s*=\s*\n+/i, '')
+    // Residual poem-line colons: earlier caching already collapsed the
+    // original newlines, leaving mid-string " :" separators between poem
+    // lines (e.g. "詩曰： :混沌未分…。 :自從…。"). Turn them back into
+    // paragraph breaks and drop any remaining leading colons.
+    .replace(/\s+:(?=[^\s：])/g, '\n\n')
+    .replace(/^:+\s*/gm, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -2165,7 +2290,7 @@ function stripNavJunk(text) {
    Runs once ever across all 4 books, gated via a Firestore marker doc. ══ */
 async function wipeNavJunkOnce() {
   if (typeof _db === 'undefined' || !_db) return;
-  const MARKER_ID = 'navWipeV3'; // bumped — v2 didn't handle -{...}- variant syntax breaking {{...}} template parsing
+  const MARKER_ID = 'navWipeV6'; // bumped — format ":"-prefixed poem lines as separate paragraphs, matching <poem> tag handling
   try {
     const markerRef = _db.collection('chapter_cache_meta').doc(MARKER_ID);
     const marker = await markerRef.get();
@@ -2198,15 +2323,48 @@ async function wipeNavJunkOnce() {
   }
 }
 
+/* One-time cleanup: chapter text used to be cached in localStorage under
+   keys like "ws_v3_shuihu_0" and filled the quota after a full preload.
+   That cache moved to an in-memory Map — purge the old keys so the quota
+   frees up for legitimate small data (progress, bookmarks, prefs). */
+function purgeStaleLocalStorageChapterCache() {
+  try {
+    const toRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && /^(ws|bh|en)_v\d+_/.test(k)) toRemove.push(k);
+    }
+    toRemove.forEach(k => localStorage.removeItem(k));
+    if (toRemove.length) console.log(`Purged ${toRemove.length} stale chapter-cache entries from localStorage.`);
+  } catch (e) { console.warn('localStorage purge failed:', e); }
+}
+
 /* ══ INIT ══ */
 document.addEventListener('DOMContentLoaded', () => {
+  purgeStaleLocalStorageChapterCache();
   mergeChapters();
+
+  // Restore page/book/chapter from the URL on first load (deep links,
+  // reloads) and normalize the URL to match the initial state.
+  const initialParams = new URLSearchParams(location.search);
+  if (initialParams.has('page') || initialParams.has('book')) {
+    state.page = initialParams.get('page') || 'home';
+    state.book = initialParams.get('book') || null;
+    const chStr = initialParams.get('ch');
+    state.chapter = chStr !== null && chStr !== '' ? parseInt(chStr, 10) : null;
+    if (state.book && !BOOKS[state.book]) { state.page = 'home'; state.book = null; state.chapter = null; }
+  }
+  history.replaceState({ page: state.page, book: state.book, chapter: state.chapter }, '', buildURLFromState());
+
   render();
   renderCompanion();
   applyOneTimeCacheFixes(); // background fix for known bad cache entries
   wipeAllEnglishCacheOnce(); // one-time global EN cache reset for name annotations
   wipeNavJunkOnce(); // one-time global cleanup of scraped Wikisource nav links
   window.addEventListener('scroll', updateReadingProgress, { passive: true });
+
+  // Browser back/forward — restore state from the URL instead of re-pushing
+  window.addEventListener('popstate', applyStateFromURL);
 });
 
 /* ════════════════════════════════════════

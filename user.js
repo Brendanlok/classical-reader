@@ -24,6 +24,13 @@ function firebaseReady() { return !!_db && !!_auth; }
   firebase.initializeApp(FIREBASE_CONFIG);
   _auth = firebase.auth();
   _db   = firebase.firestore();
+  // Firestore's default WebChannel streaming transport can hang indefinitely
+  // (no error, never resolves) behind some ad-blockers/privacy extensions or
+  // restrictive proxies that block its long-lived connection pattern. This
+  // makes the SDK detect that case and transparently fall back to long-polling.
+  try {
+    _db.settings({ experimentalAutoDetectLongPolling: true, useFetchStreams: false });
+  } catch (e) { console.warn('Firestore settings failed:', e); }
 })();
 
 /* ── User state ── */
@@ -250,13 +257,16 @@ function signInWithGoogle() {
   }
   const provider = new firebase.auth.GoogleAuthProvider();
   _auth.signInWithPopup(provider).catch(e => {
-    if (e.code === 'auth/popup-blocked') {
-      // Popup was blocked — fall back to redirect
-      _auth.signInWithRedirect(provider);
+    if (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment') {
+      // Popup blocked, or the popup's storage/IndexedDB access was restricted
+      // (common with Chrome's storage partitioning + some privacy extensions).
+      // Redirect-based sign-in stays in the same browsing context and avoids
+      // this class of storage-access error entirely.
+      _auth.signInWithRedirect(provider).catch(re => {
+        alert('Sign-in error: ' + re.message);
+      });
     } else if (e.code === 'auth/unauthorized-domain') {
       alert('Sign-in failed: add "' + location.hostname + '" to Firebase Console → Authentication → Settings → Authorized domains.');
-    } else if (e.code === 'auth/operation-not-supported-in-this-environment') {
-      alert('Sign-in blocked by your browser: a privacy/ad-blocking extension may be restricting storage access for this site. Try disabling extensions for this page, or use a different browser profile.');
     } else if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
       alert('Sign-in error: ' + e.message);
     }
@@ -325,7 +335,12 @@ loadLocalData();
 document.addEventListener('DOMContentLoaded', () => {
   if (!firebaseReady()) { renderUserBadge(); return; }
 
-  // Handle redirect result (fires after Google redirects back to the app)
+  // Handle redirect result (fires after Google redirects back to the app).
+  // This runs on EVERY page load, not just after a sign-in attempt — so it
+  // must never show a blocking alert() for errors the user didn't trigger.
+  // A native alert() halts all JS execution until dismissed, which made the
+  // entire app appear frozen for anyone whose browser blocks Firebase's
+  // storage access (the environment-not-supported error below).
   _auth.getRedirectResult().then(result => {
     if (result && result.user) {
       console.log('Redirect sign-in success:', result.user.displayName);
@@ -334,9 +349,9 @@ document.addEventListener('DOMContentLoaded', () => {
     console.error('Redirect sign-in error:', e.code, e.message);
     if (e.code === 'auth/unauthorized-domain') {
       alert('Sign-in failed: this domain is not authorised in Firebase.\n\nGo to Firebase Console → Authentication → Settings → Authorized domains and add:\n' + location.hostname);
-    } else {
-      alert('Sign-in error: ' + e.message);
     }
+    // auth/operation-not-supported-in-this-environment and other errors here
+    // are expected on plain page loads (no redirect was pending) — log only.
   });
 
   _auth.onAuthStateChanged(async user => {

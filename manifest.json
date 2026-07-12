@@ -1,0 +1,16 @@
+{
+  "name": "四大名著 · Four Great Classical Novels",
+  "short_name": "四大名著",
+  "description": "Read the Four Great Classical Novels of Chinese Literature in 繁体/简体/English with AI-assisted translation, flashcards, and quizzes.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#faf6f0",
+  "theme_color": "#8B1A1A",
+  "lang": "zh-Hant",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
