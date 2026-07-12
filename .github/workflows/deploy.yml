@@ -1,0 +1,26 @@
+name: Deploy to Netlify
+
+# Same reasoning as courtconnect's workflow — publishes via the Netlify CLI
+# instead of relying on Netlify's own git-triggered build, so this doesn't
+# draw from the shared team's Netlify build-minute quota. classical-reader
+# has no build step (plain static site, netlify.toml publish = "."), so this
+# just checks out the repo and hands the files straight to Netlify.
+#
+# Requires (see repo Settings → Secrets and variables → Actions):
+#   NETLIFY_AUTH_TOKEN — personal access token from Netlify → User settings → Applications
+#   NETLIFY_SITE_ID    — from Netlify → Site settings → General → Site details
+# Also requires disabling Netlify's own git-triggered auto-build for this
+# site (Site settings → Build & deploy → Stop builds).
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npx netlify-cli deploy --prod --dir=. --site="$NETLIFY_SITE_ID"
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
