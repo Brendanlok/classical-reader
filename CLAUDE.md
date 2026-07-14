@@ -1,6 +1,9 @@
 # classical-reader — 四大名著 reading app
-Live: https://brendanlok.github.io/classical-reader/ (GitHub Pages, auto-deploys via
-GitHub Actions on push to main — see .github/workflows/deploy.yml)
+Live: https://chineseclassics.netlify.app (Netlify, auto-deploys on git push).
+A GitHub Pages workflow also exists (.github/workflows/deploy.yml, targets
+brendanlok.github.io/classical-reader) but Pages was never actually turned on in the
+repo's Settings → Pages, so it 404s — don't trust that URL or remove Netlify config
+until Pages is confirmed live (verified with curl, not just "the workflow exists").
 
 ## What it is
 Vanilla JS single-page app (no framework, no build step) for reading the Four Great
