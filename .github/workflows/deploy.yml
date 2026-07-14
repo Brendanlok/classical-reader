@@ -1,11 +1,11 @@
 name: Deploy to GitHub Pages
 
-# Superseded the old Netlify-build-minutes workaround. Full move off Netlify.
-# No build step (plain static site) — just uploads the repo as-is.
-# Served at https://brendanlok.github.io/classical-reader/.
+# Not live: GitHub Pages was never enabled in repo Settings, so this fails every
+# run (5s, before it even builds) and spams a failure email on every push. Netlify
+# (chineseclassics.netlify.app) is still the real deploy. Manual-trigger only until
+# Pages is turned on in Settings -> Pages -> Source: GitHub Actions - re-add the
+# push trigger below once that's done and a manual run succeeds.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
