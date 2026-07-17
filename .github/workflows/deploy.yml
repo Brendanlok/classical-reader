@@ -1,10 +1,9 @@
 name: Deploy to GitHub Pages
 
-# Not live: GitHub Pages was never enabled in repo Settings, so this fails every
-# run (5s, before it even builds) and spams a failure email on every push. Netlify
-# (chineseclassics.netlify.app) is still the real deploy. Manual-trigger only until
-# Pages is turned on in Settings -> Pages -> Source: GitHub Actions - re-add the
-# push trigger below once that's done and a manual run succeeds.
+# Live once Settings -> Pages -> Source is set to "GitHub Actions" (one-time,
+# manual — GitHub doesn't expose this toggle over git push or a public API token
+# scope we have). Until then this still only runs on manual dispatch below;
+# flip to `push: branches: [master]` once Pages is confirmed working.
 on:
   workflow_dispatch:
 

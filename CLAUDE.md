@@ -1,9 +1,23 @@
 # classical-reader — 四大名著 reading app
 Live: https://chineseclassics.netlify.app (Netlify, auto-deploys on git push).
-A GitHub Pages workflow also exists (.github/workflows/deploy.yml, targets
-brendanlok.github.io/classical-reader) but Pages was never actually turned on in the
-repo's Settings → Pages, so it 404s — don't trust that URL or remove Netlify config
-until Pages is confirmed live (verified with curl, not just "the workflow exists").
+
+## IN PROGRESS: migrating Netlify→GitHub Pages and Firebase→Supabase
+Two manual steps are blocking this, neither doable from code/git:
+1. Enable Pages: repo Settings → Pages → Source: "GitHub Actions". Once done and
+   a manual `workflow_dispatch` run succeeds, flip .github/workflows/deploy.yml's
+   `on:` back to `push: branches: [master]`. Verify with curl before trusting the
+   brendanlok.github.io/classical-reader URL — it 404s until this is done.
+   Also add that domain to Firebase Console → Auth → Authorized domains (or its
+   Supabase equivalent, once migrated) or sign-in will break there.
+2. Create a Supabase project, run supabase-schema.sql (repo root) in its SQL
+   Editor, and hand over the project URL + anon key. Only then rewrite user.js
+   (auth + per-user data) and app.js's fsLoadCache/fsSaveCache/wipe functions
+   (shared chapter_cache) to use Supabase instead of Firebase — don't half-migrate
+   without both keys in hand, and don't touch the live Firebase-backed prod site
+   until the Supabase path is verified working end-to-end (sign-in, chapter
+   caching, existing-data read) in parallel, then cut over.
+manifest.json/sw.js already use relative paths so they work at either a root
+domain or a /classical-reader/ subpath without changes.
 
 ## What it is
 Vanilla JS single-page app (no framework, no build step) for reading the Four Great
