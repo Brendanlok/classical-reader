@@ -30,6 +30,19 @@ create table if not exists cache_meta (
   started_at timestamptz default now()
 );
 
+create table if not exists feedback (
+  id bigint generated always as identity primary key,
+  rating int,
+  comment text,
+  email text,
+  page text,
+  book text,
+  lang text,
+  uid text,
+  date timestamptz default now(),
+  ua text
+);
+
 -- Row Level Security: chapter_cache + cache_meta are public read/write (matches
 -- current Firestore rules — it's a shared translation cache, not sensitive data).
 alter table chapter_cache enable row level security;
@@ -40,6 +53,12 @@ alter table cache_meta enable row level security;
 create policy "public read/write cache_meta" on cache_meta
   for all using (true) with check (true);
 
+-- feedback: anyone can submit; only read via the admin UI (gated client-side by
+-- OWNER_UID in app.js), so allow public insert+select same as the other shared tables.
+alter table feedback enable row level security;
+create policy "public read/write feedback" on feedback
+  for all using (true) with check (true);
+
 -- user_data: each user can only read/write their own row.
 alter table user_data enable row level security;
 create policy "users manage own row" on user_data
@@ -48,5 +67,6 @@ create policy "users manage own row" on user_data
 -- Explicit grants (belt-and-suspenders alongside RLS policies above).
 grant select, insert, update on chapter_cache to anon, authenticated;
 grant select, insert, update on cache_meta to anon, authenticated;
+grant select, insert on feedback to anon, authenticated;
 grant select, insert, update on user_data to authenticated;
 

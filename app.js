@@ -218,7 +218,7 @@ function setCached(type, bookId, chapterIdx, text) {
   _memCache.set(cacheKey(type, bookId, chapterIdx), text);
 }
 
-/* ══ FIRESTORE SHARED TRANSLATION CACHE ══
+/* ══ SUPABASE SHARED TRANSLATION CACHE ══
    Translations saved here are shared across ALL users — once any user reads a chapter,
    it's permanently cached for everyone. No re-translation ever needed.
 */
@@ -235,16 +235,15 @@ function isLikelyTraditional(text) {
 }
 
 async function fsLoadCache(bookId, chapterIdx) {
-  if (typeof _db === 'undefined' || !_db) return false;
+  if (typeof _sb === 'undefined' || !_sb) return false;
   try {
-    const doc = await _db.collection('chapter_cache').doc(`${bookId}_${chapterIdx}`).get();
-    if (!doc.exists) return false;
-    const d = doc.data();
+    const { data: d, error } = await _sb.from('chapter_cache')
+      .select('ws,bh,en').eq('id', `${bookId}_${chapterIdx}`).maybeSingle();
+    if (error || !d) return false;
     // Validate bh cache: reject if it's still traditional Chinese (bad translation)
     if (d.bh && isLikelyTraditional(d.bh)) {
       delete d.bh;
-      _db.collection('chapter_cache').doc(`${bookId}_${chapterIdx}`)
-        .update({ bh: firebase.firestore.FieldValue.delete() }).catch(() => {});
+      _sb.from('chapter_cache').update({ bh: null }).eq('id', `${bookId}_${chapterIdx}`).then(() => {});
     }
     ['ws','bh','en'].forEach(t => { if (d[t]) setCached(t, bookId, chapterIdx, d[t]); });
     return !!(d.ws || d.bh || d.en);
@@ -252,11 +251,9 @@ async function fsLoadCache(bookId, chapterIdx) {
 }
 
 async function fsSaveCache(bookId, chapterIdx, type, text) {
-  if (typeof _db === 'undefined' || !_db || !text) return;
+  if (typeof _sb === 'undefined' || !_sb || !text) return;
   try {
-    await _db.collection('chapter_cache').doc(`${bookId}_${chapterIdx}`).set(
-      { [type]: text }, { merge: true }
-    );
+    await _sb.from('chapter_cache').upsert({ id: `${bookId}_${chapterIdx}`, [type]: text });
   } catch {}
 }
 
@@ -1038,9 +1035,9 @@ async function submitFeedback() {
     date: new Date().toISOString(),
     ua:   navigator.userAgent.slice(0, 120),
   };
-  // Save to Firestore
-  if (typeof _db !== 'undefined' && _db) {
-    try { await _db.collection('feedback').add(payload); } catch(e) { console.warn('Feedback save failed:', e); }
+  // Save to Supabase
+  if (typeof _sb !== 'undefined' && _sb) {
+    try { await _sb.from('feedback').insert(payload); } catch(e) { console.warn('Feedback save failed:', e); }
   }
   // Show thank-you step
   document.getElementById('fb-step-2').style.display = 'none';
@@ -1049,19 +1046,21 @@ async function submitFeedback() {
 
 /* ══ ADMIN VIEW ══ */
 async function loadAdminFeedback() {
-  if (typeof _db === 'undefined' || !_db) return '<p class="lib-empty">Firestore not connected.</p>';
+  if (typeof _sb === 'undefined' || !_sb) return '<p class="lib-empty">Supabase not connected.</p>';
   try {
-    const snap = await _db.collection('feedback').orderBy('date', 'desc').limit(100).get();
-    if (snap.empty) return '<p class="lib-empty">No feedback yet.</p>';
-    const avgRating = snap.docs.reduce((s, d) => s + (d.data().rating || 0), 0) / snap.docs.size;
+    const { data: rows, error } = await _sb.from('feedback')
+      .select('*').order('date', { ascending: false }).limit(100);
+    if (error) throw error;
+    if (!rows.length) return '<p class="lib-empty">No feedback yet.</p>';
+    const avgRating = rows.reduce((s, f) => s + (f.rating || 0), 0) / rows.length;
     const ratingDist = [1,2,3,4,5].map(r => ({
-      r, count: snap.docs.filter(d => d.data().rating === r).length
+      r, count: rows.filter(f => f.rating === r).length
     }));
     const maxCount = Math.max(...ratingDist.map(x => x.count), 1);
     const summary = `
       <div class="admin-summary">
         <div class="admin-avg">${avgRating.toFixed(1)} <span class="admin-avg-star">★</span></div>
-        <div class="admin-total">${snap.size} responses</div>
+        <div class="admin-total">${rows.length} responses</div>
         <div class="admin-dist">
           ${ratingDist.reverse().map(x => `
             <div class="admin-dist-row">
@@ -1071,8 +1070,7 @@ async function loadAdminFeedback() {
             </div>`).join('')}
         </div>
       </div>`;
-    const entries = snap.docs.map(d => {
-      const f = d.data();
+    const entries = rows.map(f => {
       const date = new Date(f.date).toLocaleDateString();
       const stars = '★'.repeat(f.rating) + '☆'.repeat(5 - f.rating);
       return `<div class="admin-fb-card">
@@ -2187,142 +2185,6 @@ function updateReadingProgress() {
   if (pct >= 99) state.reachedEnd = true;
 }
 
-/* ══ ONE-TIME CACHE FIXES ══ */
-async function applyOneTimeCacheFixes() {
-  if (typeof _db === 'undefined' || !_db) return;
-  // List of known bad bh cache entries: { bookId, chapterIdx, fixKey }
-  // fixKey stored in localStorage so the fix only runs once per device
-  const fixes = [
-    { bookId: 'shuihu', chapterIdx: 0, fixKey: 'fix_wm0_bh_v3' },
-  ];
-  for (const { bookId, chapterIdx, fixKey } of fixes) {
-    if (localStorage.getItem(fixKey)) continue; // already fixed on this device
-    try {
-      const docRef = _db.collection('chapter_cache').doc(`${bookId}_${chapterIdx}`);
-      const doc = await docRef.get();
-      const d = doc.exists ? doc.data() : {};
-      // Delete corrupt bh unconditionally
-      if (doc.exists) {
-        await docRef.update({ bh: firebase.firestore.FieldValue.delete() });
-      }
-      // Seed ws from Firestore if not in memory
-      if (!getCached('ws', bookId, chapterIdx) && d.ws) {
-        setCached('ws', bookId, chapterIdx, d.ws);
-      }
-      if (!getCached('ws', bookId, chapterIdx)) await fetchWenyan(bookId, chapterIdx);
-      const ws = getCached('ws', bookId, chapterIdx);
-      if (!ws) continue;
-      // Fresh simplified translation
-      const simplified = await gtranslate(ws, 'zh-CN');
-      if (simplified && simplified.trim().length > 50) {
-        setCached('bh', bookId, chapterIdx, simplified);
-        await fsSaveCache(bookId, chapterIdx, 'bh', simplified);
-        localStorage.setItem(fixKey, '1'); // mark done
-      }
-    } catch(e) { console.warn('Cache fix failed:', e); }
-  }
-}
-
-/* ══ ONE-TIME GLOBAL WIPE: clear all cached EN translations so they
-   regenerate with proper-noun annotations (繁体 in brackets). Runs once
-   ever, server-side gated via a Firestore marker doc — not per device,
-   so it doesn't repeat for every visitor. ══ */
-async function wipeAllEnglishCacheOnce() {
-  if (typeof _db === 'undefined' || !_db) return;
-  const MARKER_ID = 'enWipeV3'; // bumped — forcing a fresh full wipe now that deploys are reliably reaching production
-  try {
-    const markerRef = _db.collection('chapter_cache_meta').doc(MARKER_ID);
-    const marker = await markerRef.get();
-    if (marker.exists) return; // already done by someone else
-
-    // Claim the marker first so concurrent visitors don't double-run
-    await markerRef.set({ startedAt: new Date().toISOString() });
-
-    const snap = await _db.collection('chapter_cache').where('en', '!=', null).get();
-    const docs = snap.docs.filter(d => d.data().en);
-    let batch = _db.batch();
-    let count = 0;
-    for (const d of docs) {
-      batch.update(d.ref, { en: firebase.firestore.FieldValue.delete() });
-      count++;
-      if (count % 450 === 0) { await batch.commit(); batch = _db.batch(); }
-    }
-    if (count % 450 !== 0) await batch.commit();
-    console.log(`Wiped EN cache for ${count} chapters — will regenerate with name annotations.`);
-  } catch (e) {
-    console.warn('EN cache wipe failed:', e);
-  }
-}
-
-/* Strip Wikisource chapter-nav junk (上一回/回目录/下一回, "----" separators)
-   AND residual unparsed markup (-{...}- variant syntax, {{...}} templates)
-   from already-cached plain text. Mirrors cleanWikitext()'s logic so cached
-   text that was fetched before that parser was fixed gets cleaned too. */
-function stripNavJunk(text) {
-  if (!text) return text;
-  let t = resolveVariantSyntax(text);
-  t = stripTemplates(t);
-  return t
-    // Not line-anchored — nav links often sit inline with content, no newline between them
-    .replace(/[　\s]*(?:(?:上一回|下一回|回目录|目录)[　\s]*){1,4}-{2,}[　\s]*/g, '')
-    .replace(/(?:(?:上一回|下一回|回目录|目录)[　\s]*){2,4}/g, '')
-    .replace(/-{3,}/g, '')
-    .replace(/Previous episode.*Next episode.*$/gim, '')
-    .replace(/Return to table of contents/gi, '')
-    // Residual damage from an already-corrupted cache entry: the {{header}}
-    // template's braces are gone (a prior parser bug already unwrapped it),
-    // leaving bare leaked field text like "notes\n\n= \n\n" at the very
-    // start. Strip it directly since there's no {{...}} left to re-parse.
-    .replace(/^\s*notes\s*\n+\s*=\s*\n+/i, '')
-    // Residual poem-line colons: earlier caching already collapsed the
-    // original newlines, leaving mid-string " :" separators between poem
-    // lines (e.g. "詩曰： :混沌未分…。 :自從…。"). Turn them back into
-    // paragraph breaks and drop any remaining leading colons.
-    .replace(/\s+:(?=[^\s：])/g, '\n\n')
-    .replace(/^:+\s*/gm, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-/* ══ ONE-TIME GLOBAL WIPE: remove Wikisource nav-link junk (上一回/回目录/
-   下一回, "----" separators) that got scraped into ws and baked into every
-   translation. Cleans ws in place, deletes bh/en so they regenerate clean.
-   Runs once ever across all 4 books, gated via a Firestore marker doc. ══ */
-async function wipeNavJunkOnce() {
-  if (typeof _db === 'undefined' || !_db) return;
-  const MARKER_ID = 'navWipeV6'; // bumped — format ":"-prefixed poem lines as separate paragraphs, matching <poem> tag handling
-  try {
-    const markerRef = _db.collection('chapter_cache_meta').doc(MARKER_ID);
-    const marker = await markerRef.get();
-    if (marker.exists) return; // already done by someone else
-
-    await markerRef.set({ startedAt: new Date().toISOString() });
-
-    const snap = await _db.collection('chapter_cache').get();
-    let batch = _db.batch();
-    let count = 0;
-    for (const d of snap.docs) {
-      const data = d.data();
-      const update = {};
-      if (data.ws) {
-        const cleaned = stripNavJunk(data.ws);
-        if (cleaned !== data.ws) update.ws = cleaned;
-      }
-      if (data.bh) update.bh = firebase.firestore.FieldValue.delete();
-      if (data.en) update.en = firebase.firestore.FieldValue.delete();
-      if (Object.keys(update).length) {
-        batch.update(d.ref, update);
-        count++;
-        if (count % 450 === 0) { await batch.commit(); batch = _db.batch(); }
-      }
-    }
-    if (count % 450 !== 0) await batch.commit();
-    console.log(`Cleaned nav-junk for ${count} chapters across all books.`);
-  } catch (e) {
-    console.warn('Nav-junk wipe failed:', e);
-  }
-}
-
 /* One-time cleanup: chapter text used to be cached in localStorage under
    keys like "ws_v3_shuihu_0" and filled the quota after a full preload.
    That cache moved to an in-memory Map — purge the old keys so the quota
@@ -2358,9 +2220,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   render();
   renderCompanion();
-  applyOneTimeCacheFixes(); // background fix for known bad cache entries
-  wipeAllEnglishCacheOnce(); // one-time global EN cache reset for name annotations
-  wipeNavJunkOnce(); // one-time global cleanup of scraped Wikisource nav links
   window.addEventListener('scroll', updateReadingProgress, { passive: true });
 
   // Browser back/forward — restore state from the URL instead of re-pushing

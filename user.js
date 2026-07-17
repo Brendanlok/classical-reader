@@ -33,6 +33,17 @@ function firebaseReady() { return !!_db && !!_auth; }
   } catch (e) { console.warn('Firestore settings failed:', e); }
 })();
 
+/* ── Bootstrap Supabase (backs shared chapter_cache + feedback — Stage A of
+   the Netlify/Firebase -> GitHub Pages/Supabase migration; auth + per-user
+   data stay on Firebase until Google OAuth is set up in Supabase) ── */
+const SUPABASE_URL = "https://xcniaumeckvlfiwnafno.supabase.co";
+const SUPABASE_KEY = "sb_publishable_Z3Fz_4k-J5NKNX1aUKDzCA_tAMCxd86";
+let _sb = null;
+(function initSupabase() {
+  if (typeof supabase === 'undefined') return;
+  _sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+})();
+
 /* ── User state ── */
 const USER = {
   uid:               null,
