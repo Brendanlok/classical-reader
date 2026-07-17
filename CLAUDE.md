@@ -1,36 +1,39 @@
 # classical-reader — 四大名著 reading app
 Live: https://chineseclassics.netlify.app (Netlify, auto-deploys on git push).
 
-## IN PROGRESS: migrating Netlify→GitHub Pages and Firebase→Supabase
+## Firebase → Supabase migration: DONE. Firebase is fully removed.
+Both stages complete — chapter_cache/feedback (Stage A) and auth/user_data
+(Stage B) all run on Supabase now. Firebase SDK script tags, FIREBASE_CONFIG,
+and all `_db`/`_auth`/`firebase.*` calls were deleted from index.html/user.js/
+app.js. Google sign-in goes through Supabase's OAuth (Authentication →
+Providers → Google in the Supabase dashboard, backed by a Google Cloud OAuth
+client under the "classical-reader" GCP project — console.cloud.google.com/
+apis/credentials). No admin-level migration of old Firebase users was done:
+Supabase mints a new user id per Google account on first sign-in, so returning
+users' old Firestore-era cloud data doesn't carry over (their local-device data
+is untouched). OWNER_UID in app.js is a placeholder needing your new Supabase
+uid — sign in once, find your id in Supabase Dashboard → Authentication →
+Users, paste it in.
 
-**Stage A (chapter_cache + feedback → Supabase): DONE.** fsLoadCache/fsSaveCache
-and the feedback functions now read/write Supabase (SUPABASE_URL/SUPABASE_KEY in
-user.js). All 448 existing Firestore chapter_cache docs were copied over (script
-was one-time, not committed). The three legacy one-time Firestore-cleanup
-functions (applyOneTimeCacheFixes, wipeAllEnglishCacheOnce, wipeNavJunkOnce) and
-their stripNavJunk helper were deleted — they existed only to repair corrupted
-historical data, which doesn't exist in the fresh Supabase copy.
-
-**Stage B (auth + per-user data → Supabase): NOT STARTED.** user.js's
-signInWithGoogle/signOut/onAuthStateChanged/loadCloudData/saveCloudData and the
-two remaining `_db.collection('users')...` calls in app.js (saveUserPrefs,
-confirmReset) still run on Firebase — intentionally, until Google OAuth is
-configured in Supabase (Authentication → Providers → Google, needs a Google
-Cloud OAuth Client ID/Secret — can reuse the one Firebase Auth already has, or
-make a new one) and its redirect URL is allowlisted. Don't migrate this half-way;
-existing users' Firestore `users/{uid}` docs also need copying to the `user_data`
-table (same pattern as the chapter_cache migration script) before cutover.
-
-**GitHub Pages**: still blocked on repo Settings → Pages → Source: "GitHub
-Actions" (manual toggle, not doable via git). Once done, flip
-.github/workflows/deploy.yml's `on:` back to `push: branches: [master]` and
-verify with curl before trusting brendanlok.github.io/classical-reader — it
-404s until this is done. Whichever domain ends up live needs adding to
-Firebase Console → Auth → Authorized domains (Supabase's auth domain
-allowlist too, once Stage B lands) or sign-in breaks there.
+## GitHub Pages migration: still not done.
+Blocked on repo Settings → Pages → Source: "GitHub Actions" (manual toggle,
+not doable via git). Once done, flip .github/workflows/deploy.yml's `on:`
+back to `push: branches: [master]` and verify with curl before trusting
+brendanlok.github.io/classical-reader — it 404s until this is done. Whichever
+domain ends up live needs adding to Supabase → Authentication → URL
+Configuration → Redirect URLs, or sign-in breaks there.
 
 manifest.json/sw.js already use relative paths so they work at either a root
 domain or a /classical-reader/ subpath without changes.
+
+## Netlify gotcha that cost real time (2026-07)
+Netlify's GitHub connection silently broke (repo-access error) for over a
+week and every push failed invisibly — check the Deploys tab occasionally,
+don't assume a push went live just because `git push` succeeded. Separately,
+`netlify.toml`'s `publish = "."` can conflict with a stale dashboard "Publish
+directory" field left over from when this was a subfolder of the ~/.claude
+monorepo — if deploys fail with "Deploy directory '...' does not exist",
+clear that dashboard field to `.` to match netlify.toml.
 
 ## What it is
 Vanilla JS single-page app (no framework, no build step) for reading the Four Great
@@ -40,8 +43,7 @@ notes/highlights, flashcards, quizzes, an AI chatbot, and a feedback form.
 ## Files
 - index.html — shell + PWA tags; scripts loaded with ?v= cache-buster query
 - app.js     — everything: state, router, rendering, fetching, caching (~2300 lines)
-- user.js    — Firebase init (auth + users/{uid}, Stage B pending), Supabase init
-  (chapter_cache + feedback, Stage A done)
+- user.js    — Supabase init: auth (Google OAuth) + user_data table
 - data.js    — book metadata, flashcards, quizzes; chapters.js — chapter lists
 - styles.css — all styles; sw.js — network-first service worker (PWA)
 - supabase-schema.sql — full schema, safe to rerun on a fresh project (all
@@ -64,11 +66,9 @@ notes/highlights, flashcards, quizzes, an AI chatbot, and a feedback form.
   Done post-translation in annotateNames(); surname list + place-suffix regex.
 - Every fetch failure must land in the `_failed` Set so the UI shows a Retry button.
   A fetch that errors without recording failure = the eternal stuck spinner bug.
-- Firebase Auth init keeps `experimentalAutoDetectLongPolling: true` on the Firestore
-  instance (still used for auth's users/{uid} doc until Stage B) — without it the
-  SDK hangs forever (no error) behind some ad-blockers.
-- Never call alert() from code that runs on page load (e.g. getRedirectResult catch).
-  A blocking alert froze the whole app for users with blocked storage.
+- Never call alert() from code that runs on page load / passive auth-state callbacks.
+  A blocking alert froze the whole app for users with blocked storage (was a real
+  Firebase-era bug; Supabase's onAuthStateChange callback follows the same rule).
 - Book IDs are shuihu / xiyou / sanguoyanyi / hongloumeng (not English names).
 
 ## Conventions
@@ -76,14 +76,15 @@ notes/highlights, flashcards, quizzes, an AI chatbot, and a feedback form.
 - Mode pills are labeled 繁体 / 简体 / EN (not 文言文/白话文).
 - URL routing: nav() pushes ?page=&book=&ch= — new pages must go through nav().
 - User prefs (lang, text mode, reading settings) persist via saveUserPrefs() to
-  localStorage + Firestore; new settings should hook into it.
+  localStorage + Supabase (user_data.prefs); new settings should hook into it.
 - Cache-busting: bump the ?v= query in index.html when shipping JS changes that
   must reach users immediately.
 
 ## Gotchas
 - OWNER_UID in app.js gates the admin feedback tab.
-- Firestore rules: chapter_cache + chapter_cache_meta are public r/w; users/{uid}
-  is auth-gated. New collections need a rule added in Firebase Console first.
+- Supabase RLS: chapter_cache/cache_meta/feedback are public r/w; user_data is
+  gated to `auth.uid()::text = uid`. New tables need a policy in supabase-schema.sql
+  (or run directly in SQL Editor) before the app can read/write them.
 - Groq API key in app.js powers only the chatbot/AI flashcards; translations use
   free Google Translate (translate.googleapis.com, chunked ≤600 chars).
 - deploy.ps1 stages everything in this repo (git add .) and no-ops if nothing

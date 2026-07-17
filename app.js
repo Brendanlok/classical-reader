@@ -951,7 +951,7 @@ function renderFooter() {
 }
 
 /* ══ FEEDBACK ══ */
-const OWNER_UID = 'replace_with_your_firebase_uid'; // set this to your own Firebase UID
+const OWNER_UID = 'replace_with_your_supabase_uid'; // set this to your own Supabase auth.users id
 
 function showFeedback() {
   let el = document.getElementById('feedback-modal');
