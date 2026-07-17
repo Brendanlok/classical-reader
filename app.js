@@ -201,13 +201,13 @@ function cacheKey(type, bookId, chapterIdx) {
 }
 
 /* In-memory cache for chapter text (繁体/简体/EN), NOT localStorage.
-   Firestore is already the permanent shared cache across all users and
+   Supabase is already the permanent shared cache across all users and
    devices; localStorage was a redundant local optimization that filled its
    ~5-10MB quota after preloading all ~448 chapters, after which every write
    silently failed and the app could never satisfy its own cache checks —
    causing an infinite fetch loop that looked like a stuck spinner. An
    in-memory Map has no such quota (bounded only by RAM) and still resets
-   naturally on reload, which is fine since Firestore is the source of truth. */
+   naturally on reload, which is fine since Supabase is the source of truth. */
 const _memCache = new Map();
 
 function getCached(type, bookId, chapterIdx) {
@@ -282,7 +282,7 @@ async function gtranslate(text, targetLang) {
   return parts.join('\n\n');
 }
 
-/* ══ WENYAN FETCH (Firestore shared cache first, Wikisource as fallback) ══ */
+/* ══ WENYAN FETCH (Supabase shared cache first, Wikisource as fallback) ══ */
 async function fetchWenyan(bookId, chapterIdx) {
   const key = cacheKey('ws', bookId, chapterIdx);
   if (_fetching.has(key)) return;
@@ -290,7 +290,7 @@ async function fetchWenyan(bookId, chapterIdx) {
   _fetching.add(key);
   render();
   try {
-    // 1. Check Firestore — another user may have already fetched this chapter
+    // 1. Check Supabase — another user may have already fetched this chapter
     await fsLoadCache(bookId, chapterIdx);
     if (getCached('ws', bookId, chapterIdx)) return; // got it from cloud cache
 
@@ -355,7 +355,7 @@ async function annotateNames(wenyan, englishText) {
   }
 }
 
-/* ══ TRANSLATION (Google Translate → Firestore permanent cache) ══ */
+/* ══ TRANSLATION (Google Translate → Supabase permanent cache) ══ */
 async function fetchTranslation(cacheType, bookId, chapterIdx) {
   const key = cacheKey(cacheType, bookId, chapterIdx);
   if (_fetching.has(key) || _failed.has(key)) return;
@@ -365,7 +365,7 @@ async function fetchTranslation(cacheType, bookId, chapterIdx) {
   render();
 
   try {
-    // 1. Check Firestore — another user may have already translated this chapter
+    // 1. Check Supabase — another user may have already translated this chapter
     await fsLoadCache(bookId, chapterIdx);
     if (getCached(cacheType, bookId, chapterIdx)) return; // got it from cloud cache
 
@@ -693,7 +693,7 @@ function toggleLang() {
   render();
 }
 
-/* ── Persist user preferences to localStorage + Firestore ── */
+/* ── Persist user preferences to localStorage + Supabase ── */
 function saveUserPrefs() {
   const prefs = {
     lang: state.lang,
