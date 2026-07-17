@@ -11,7 +11,7 @@ const state = {
   chapter: null,
   fc:  { index: 0, flipped: false, filter: 'All', deck: [], aiMode: false, aiLoading: false },
   mcq: { index: 0, answered: false, chosen: -1, score: 0, total: 0, done: false, deck: [], aiMode: false, aiLoading: false },
-  apiKey: localStorage.getItem('groq_api_key') || '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',
+  apiKey: localStorage.getItem('groq_api_key') || '',
   chat: { open: false, messages: [], loading: false },
   libraryTab: 'progress',
   notesSortBy: 'recent',
