@@ -53,19 +53,13 @@
   </div>
 </div>
 
-<!-- Firebase SDK (compat CDN — works without a bundler). Still used for sign-in
-     and per-user data until Google OAuth is configured in Supabase (Stage B). -->
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-
-<!-- Supabase SDK — backs the shared chapter_cache + feedback tables (Stage A) -->
+<!-- Supabase SDK — auth, per-user data, shared chapter_cache + feedback -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-<script src="data.js?v=20260717supabase"></script>
-<script src="chapters.js?v=20260717supabase"></script>
-<script src="user.js?v=20260717supabase"></script>
-<script src="app.js?v=20260717supabase"></script>
+<script src="data.js?v=20260718stageB"></script>
+<script src="chapters.js?v=20260718stageB"></script>
+<script src="user.js?v=20260718stageB"></script>
+<script src="app.js?v=20260718stageB"></script>
 
 <!-- AI Companion -->
 <div id="ai-companion-root"></div>

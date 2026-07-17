@@ -701,9 +701,9 @@ function saveUserPrefs() {
     readingPrefs: state.readingPrefs,
   };
   try { localStorage.setItem('reader_user_prefs', JSON.stringify(prefs)); } catch {}
-  // Sync to Firestore so prefs restore on login from any device
-  if (typeof _db !== 'undefined' && _db && typeof USER !== 'undefined' && USER.uid) {
-    _db.collection('users').doc(USER.uid).set({ prefs }, { merge: true }).catch(() => {});
+  // Sync to Supabase so prefs restore on login from any device
+  if (typeof _sb !== 'undefined' && _sb && typeof USER !== 'undefined' && USER.uid) {
+    _sb.from('user_data').upsert({ uid: USER.uid, prefs }).then(() => {});
   }
 }
 
@@ -1848,13 +1848,14 @@ async function confirmReset() {
     USER.chatLog           = [];
   }
 
-  // Wipe Firestore doc for this user
-  if (typeof _db !== 'undefined' && _db && typeof USER !== 'undefined' && USER.uid) {
+  // Wipe Supabase row for this user
+  if (typeof _sb !== 'undefined' && _sb && typeof USER !== 'undefined' && USER.uid) {
     try {
-      await _db.collection('users').doc(USER.uid).set({
-        progress: {}, bookmarks: {}, startedChapters: {}, completedChapters: {},
-        notes: {}, highlights: {}, quizHistory: [], chatLog: [],
-        updatedAt: new Date().toISOString(),
+      await _sb.from('user_data').upsert({
+        uid: USER.uid,
+        progress: {}, bookmarks: {}, started_chapters: {}, completed_chapters: {},
+        notes: {}, highlights: {}, quiz_history: [], chat_log: [],
+        updated_at: new Date().toISOString(),
       });
     } catch(e) { console.warn('Cloud reset failed:', e); }
   }

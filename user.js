@@ -1,44 +1,16 @@
-/* ══ user.js — Firebase Auth + Firestore user data ══
-   Drop your firebaseConfig below once you have it from Firebase console.
-   Until then, all data saves to localStorage as fallback.
+/* ══ user.js — Supabase Auth + per-user data ══
+   Fully migrated off Firebase (was Firebase Auth + Firestore). Google sign-in
+   goes through Supabase's OAuth (configured in its dashboard, backed by a
+   Google Cloud OAuth client), and per-user data lives in the `user_data`
+   table. Until sign-in, everything falls back to localStorage.
 */
 
-const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyBOe8vBVnmNrw8orcC4KNPEdIB2v3hbEzE",
-  authDomain: "classical-reader.firebaseapp.com",
-  databaseURL: "https://classical-reader-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "classical-reader",
-  storageBucket: "classical-reader.firebasestorage.app",
-  messagingSenderId: "910375679933",
-  appId: "1:910375679933:web:cfa8b5279505fb53e244d4"
-};
-
-/* ── Bootstrap Firebase ── */
-let _db = null;
-let _auth = null;
-
-function firebaseReady() { return !!_db && !!_auth; }
-
-(function initFirebase() {
-  if (!FIREBASE_CONFIG || typeof firebase === 'undefined') return;
-  firebase.initializeApp(FIREBASE_CONFIG);
-  _auth = firebase.auth();
-  _db   = firebase.firestore();
-  // Firestore's default WebChannel streaming transport can hang indefinitely
-  // (no error, never resolves) behind some ad-blockers/privacy extensions or
-  // restrictive proxies that block its long-lived connection pattern. This
-  // makes the SDK detect that case and transparently fall back to long-polling.
-  try {
-    _db.settings({ experimentalAutoDetectLongPolling: true, useFetchStreams: false });
-  } catch (e) { console.warn('Firestore settings failed:', e); }
-})();
-
-/* ── Bootstrap Supabase (backs shared chapter_cache + feedback — Stage A of
-   the Netlify/Firebase -> GitHub Pages/Supabase migration; auth + per-user
-   data stay on Firebase until Google OAuth is set up in Supabase) ── */
 const SUPABASE_URL = "https://xcniaumeckvlfiwnafno.supabase.co";
 const SUPABASE_KEY = "sb_publishable_Z3Fz_4k-J5NKNX1aUKDzCA_tAMCxd86";
 let _sb = null;
+
+function backendReady() { return !!_sb; }
+
 (function initSupabase() {
   if (typeof supabase === 'undefined') return;
   _sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -98,17 +70,17 @@ function saveLocalData() {
   lsSet('reader_chat_log', USER.chatLog);
 }
 
-/* ── Firestore helpers ── */
+/* ── Supabase user_data helpers ── */
 async function loadCloudData(uid) {
-  if (!firebaseReady()) return;
+  if (!backendReady()) return;
   try {
-    const doc = await _db.collection('users').doc(uid).get();
-    if (doc.exists) {
-      const d = doc.data();
-      USER.progress    = d.progress    || {};
-      USER.quizHistory = d.quizHistory || [];
-      USER.chatLog     = d.chatLog     || [];
-      const bm = d.bookmarks || {}, cc = d.completedChapters || {}, sc = d.startedChapters || {};
+    const { data: d, error } = await _sb.from('user_data').select('*').eq('uid', uid).maybeSingle();
+    if (error) throw error;
+    if (d) {
+      USER.progress    = d.progress     || {};
+      USER.quizHistory = d.quiz_history || [];
+      USER.chatLog     = d.chat_log     || [];
+      const bm = d.bookmarks || {}, cc = d.completed_chapters || {}, sc = d.started_chapters || {};
       Object.keys(bm).forEach(k => { USER.bookmarks[k] = new Set(bm[k]); });
       Object.keys(cc).forEach(k => { USER.completedChapters[k] = new Set(cc[k]); });
       Object.keys(sc).forEach(k => { USER.startedChapters[k] = new Set(sc[k]); });
@@ -124,24 +96,25 @@ async function loadCloudData(uid) {
 }
 
 async function saveCloudData() {
-  if (!firebaseReady() || !USER.uid) return;
+  if (!backendReady() || !USER.uid) return;
   const bm = {}, cc = {}, sc = {};
   Object.keys(USER.bookmarks).forEach(k => { bm[k] = [...USER.bookmarks[k]]; });
   Object.keys(USER.completedChapters).forEach(k => { cc[k] = [...USER.completedChapters[k]]; });
   Object.keys(USER.startedChapters).forEach(k => { sc[k] = [...USER.startedChapters[k]]; });
   try {
-    await _db.collection('users').doc(USER.uid).set({
-      progress:          USER.progress,
-      bookmarks:         bm,
-      startedChapters:   sc,
-      completedChapters: cc,
-      notes:             USER.notes,
-      highlights:        USER.highlights,
-      quizHistory:       USER.quizHistory,
-      chatLog:           USER.chatLog,
-      updatedAt:         new Date().toISOString(),
+    await _sb.from('user_data').upsert({
+      uid:                USER.uid,
+      progress:           USER.progress,
+      bookmarks:          bm,
+      started_chapters:   sc,
+      completed_chapters: cc,
+      notes:              USER.notes,
+      highlights:         USER.highlights,
+      quiz_history:       USER.quizHistory,
+      chat_log:           USER.chatLog,
+      updated_at:         new Date().toISOString(),
       // prefs saved separately via saveUserPrefs() to avoid overwriting on every data save
-    }, { merge: true });
+    });
   } catch(e) { console.warn('Cloud save failed:', e); }
 }
 
@@ -260,32 +233,26 @@ function saveChatEntry(bookId, chapterIdx, question, answer) {
   saveCloudData();
 }
 
-/* ── Auth ── */
+/* ── Auth ──
+   Supabase OAuth always does a full-page redirect (no popup), which sidesteps
+   the whole popup-blocked / storage-partitioning saga Firebase's popup flow
+   had. onAuthStateChange (registered at the bottom of this file) picks up
+   the session automatically once Google redirects back. */
 function signInWithGoogle() {
-  if (!firebaseReady()) {
-    alert('Firebase not configured yet. Your data is saved locally on this device.');
+  if (!backendReady()) {
+    alert('Backend not configured yet. Your data is saved locally on this device.');
     return;
   }
-  const provider = new firebase.auth.GoogleAuthProvider();
-  _auth.signInWithPopup(provider).catch(e => {
-    if (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment') {
-      // Popup blocked, or the popup's storage/IndexedDB access was restricted
-      // (common with Chrome's storage partitioning + some privacy extensions).
-      // Redirect-based sign-in stays in the same browsing context and avoids
-      // this class of storage-access error entirely.
-      _auth.signInWithRedirect(provider).catch(re => {
-        alert('Sign-in error: ' + re.message);
-      });
-    } else if (e.code === 'auth/unauthorized-domain') {
-      alert('Sign-in failed: add "' + location.hostname + '" to Firebase Console → Authentication → Settings → Authorized domains.');
-    } else if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
-      alert('Sign-in error: ' + e.message);
-    }
+  _sb.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: window.location.origin + window.location.pathname },
+  }).then(({ error }) => {
+    if (error) alert('Sign-in error: ' + error.message);
   });
 }
 
 function signOut() {
-  if (firebaseReady()) _auth.signOut();
+  if (backendReady()) _sb.auth.signOut();
   USER.uid = null; USER.name = null; USER.photo = null;
   renderUserBadge();
 }
@@ -333,7 +300,7 @@ function renderUserBadge() {
       <button class="user-signout" onclick="signOut()">Sign out</button>`;
     if (libBtn) libBtn.style.display = 'inline-flex';
   } else {
-    el.innerHTML = firebaseReady()
+    el.innerHTML = backendReady()
       ? `<button class="user-signin" onclick="signInWithGoogle()">🔑 Sign in with Google</button>`
       : `<span class="user-local" title="Data saved on this device only">💾 Local mode</span>`;
     if (libBtn) libBtn.style.display = 'none';
@@ -344,33 +311,19 @@ function renderUserBadge() {
 loadLocalData();
 
 document.addEventListener('DOMContentLoaded', () => {
-  if (!firebaseReady()) { renderUserBadge(); return; }
+  if (!backendReady()) { renderUserBadge(); return; }
 
-  // Handle redirect result (fires after Google redirects back to the app).
-  // This runs on EVERY page load, not just after a sign-in attempt — so it
-  // must never show a blocking alert() for errors the user didn't trigger.
-  // A native alert() halts all JS execution until dismissed, which made the
-  // entire app appear frozen for anyone whose browser blocks Firebase's
-  // storage access (the environment-not-supported error below).
-  _auth.getRedirectResult().then(result => {
-    if (result && result.user) {
-      console.log('Redirect sign-in success:', result.user.displayName);
-    }
-  }).catch(e => {
-    console.error('Redirect sign-in error:', e.code, e.message);
-    if (e.code === 'auth/unauthorized-domain') {
-      alert('Sign-in failed: this domain is not authorised in Firebase.\n\nGo to Firebase Console → Authentication → Settings → Authorized domains and add:\n' + location.hostname);
-    }
-    // auth/operation-not-supported-in-this-environment and other errors here
-    // are expected on plain page loads (no redirect was pending) — log only.
-  });
-
-  _auth.onAuthStateChanged(async user => {
+  // Fires on initial load (restoring a session, including right after the
+  // OAuth redirect back from Google) and on every subsequent sign-in/out.
+  // Supabase parses the redirect URL itself — no separate "handle redirect
+  // result" step needed like Firebase required.
+  _sb.auth.onAuthStateChange(async (_event, session) => {
+    const user = session?.user;
     if (user) {
-      USER.uid   = user.uid;
-      USER.name  = user.displayName;
-      USER.photo = user.photoURL;
-      await loadCloudData(user.uid);
+      USER.uid   = user.id;
+      USER.name  = user.user_metadata?.full_name || user.user_metadata?.name || user.email;
+      USER.photo = user.user_metadata?.avatar_url || user.user_metadata?.picture;
+      await loadCloudData(user.id);
     } else {
       USER.uid = null; USER.name = null; USER.photo = null;
     }
