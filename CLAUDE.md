@@ -2,20 +2,33 @@
 Live: https://chineseclassics.netlify.app (Netlify, auto-deploys on git push).
 
 ## IN PROGRESS: migrating Netlify→GitHub Pages and Firebase→Supabase
-Two manual steps are blocking this, neither doable from code/git:
-1. Enable Pages: repo Settings → Pages → Source: "GitHub Actions". Once done and
-   a manual `workflow_dispatch` run succeeds, flip .github/workflows/deploy.yml's
-   `on:` back to `push: branches: [master]`. Verify with curl before trusting the
-   brendanlok.github.io/classical-reader URL — it 404s until this is done.
-   Also add that domain to Firebase Console → Auth → Authorized domains (or its
-   Supabase equivalent, once migrated) or sign-in will break there.
-2. Create a Supabase project, run supabase-schema.sql (repo root) in its SQL
-   Editor, and hand over the project URL + anon key. Only then rewrite user.js
-   (auth + per-user data) and app.js's fsLoadCache/fsSaveCache/wipe functions
-   (shared chapter_cache) to use Supabase instead of Firebase — don't half-migrate
-   without both keys in hand, and don't touch the live Firebase-backed prod site
-   until the Supabase path is verified working end-to-end (sign-in, chapter
-   caching, existing-data read) in parallel, then cut over.
+
+**Stage A (chapter_cache + feedback → Supabase): DONE.** fsLoadCache/fsSaveCache
+and the feedback functions now read/write Supabase (SUPABASE_URL/SUPABASE_KEY in
+user.js). All 448 existing Firestore chapter_cache docs were copied over (script
+was one-time, not committed). The three legacy one-time Firestore-cleanup
+functions (applyOneTimeCacheFixes, wipeAllEnglishCacheOnce, wipeNavJunkOnce) and
+their stripNavJunk helper were deleted — they existed only to repair corrupted
+historical data, which doesn't exist in the fresh Supabase copy.
+
+**Stage B (auth + per-user data → Supabase): NOT STARTED.** user.js's
+signInWithGoogle/signOut/onAuthStateChanged/loadCloudData/saveCloudData and the
+two remaining `_db.collection('users')...` calls in app.js (saveUserPrefs,
+confirmReset) still run on Firebase — intentionally, until Google OAuth is
+configured in Supabase (Authentication → Providers → Google, needs a Google
+Cloud OAuth Client ID/Secret — can reuse the one Firebase Auth already has, or
+make a new one) and its redirect URL is allowlisted. Don't migrate this half-way;
+existing users' Firestore `users/{uid}` docs also need copying to the `user_data`
+table (same pattern as the chapter_cache migration script) before cutover.
+
+**GitHub Pages**: still blocked on repo Settings → Pages → Source: "GitHub
+Actions" (manual toggle, not doable via git). Once done, flip
+.github/workflows/deploy.yml's `on:` back to `push: branches: [master]` and
+verify with curl before trusting brendanlok.github.io/classical-reader — it
+404s until this is done. Whichever domain ends up live needs adding to
+Firebase Console → Auth → Authorized domains (Supabase's auth domain
+allowlist too, once Stage B lands) or sign-in breaks there.
+
 manifest.json/sw.js already use relative paths so they work at either a root
 domain or a /classical-reader/ subpath without changes.
 
@@ -26,31 +39,34 @@ notes/highlights, flashcards, quizzes, an AI chatbot, and a feedback form.
 
 ## Files
 - index.html — shell + PWA tags; scripts loaded with ?v= cache-buster query
-- app.js     — everything: state, router, rendering, fetching, caching (~2400 lines)
-- user.js    — Firebase init, Google auth, per-user Firestore data (users/{uid})
+- app.js     — everything: state, router, rendering, fetching, caching (~2300 lines)
+- user.js    — Firebase init (auth + users/{uid}, Stage B pending), Supabase init
+  (chapter_cache + feedback, Stage A done)
 - data.js    — book metadata, flashcards, quizzes; chapters.js — chapter lists
 - styles.css — all styles; sw.js — network-first service worker (PWA)
+- supabase-schema.sql — full schema, safe to rerun on a fresh project (all
+  `create table if not exists` + policies); doesn't track incremental additions
+  already applied to the live project (e.g. supabase-schema-feedback-addition.sql
+  was one such addition, already applied and deleted after use)
 
 ## Architecture rules (violating these caused real outages)
 - Chapter text cache: in-memory Map only (getCached/setCached). NEVER cache chapter
   text in localStorage — full novels blew the 5MB quota, every write silently failed,
   and the app hung in an infinite fetch loop. localStorage is for small user data only.
-- Firestore `chapter_cache/{bookId}_{chapterIdx}` (fields ws/bh/en) is the permanent
-  shared cache for ALL users. Check it before any external fetch (both fetchWenyan
-  and fetchTranslation do this — keep it that way).
+- Supabase `chapter_cache` table (id = "{bookId}_{chapterIdx}", columns ws/bh/en) is
+  the permanent shared cache for ALL users. Check it before any external fetch (both
+  fetchWenyan and fetchTranslation do this via fsLoadCache — keep it that way).
 - Source text comes from zh.wikisource.org. All cleaning lives in cleanWikitext():
   -{...}- variant syntax must be resolved BEFORE {{...}} template stripping;
   {{header}}-type metadata templates are deleted, not unwrapped; ":"-prefixed lines
   are poem verses → one paragraph per line.
-- One-time global cache migrations use marker docs in `chapter_cache_meta` plus a
-  versioned MARKER_ID (navWipeV6, enWipeV3...). To rerun a migration, bump the
-  version — never delete markers by hand.
 - EN translations annotate proper nouns with 繁体 in brackets: "Song Jiang（宋江）".
   Done post-translation in annotateNames(); surname list + place-suffix regex.
 - Every fetch failure must land in the `_failed` Set so the UI shows a Retry button.
   A fetch that errors without recording failure = the eternal stuck spinner bug.
-- Firestore init keeps `experimentalAutoDetectLongPolling: true` — without it the SDK
-  hangs forever (no error) behind some ad-blockers.
+- Firebase Auth init keeps `experimentalAutoDetectLongPolling: true` on the Firestore
+  instance (still used for auth's users/{uid} doc until Stage B) — without it the
+  SDK hangs forever (no error) behind some ad-blockers.
 - Never call alert() from code that runs on page load (e.g. getRedirectResult catch).
   A blocking alert froze the whole app for users with blocked storage.
 - Book IDs are shuihu / xiyou / sanguoyanyi / hongloumeng (not English names).
