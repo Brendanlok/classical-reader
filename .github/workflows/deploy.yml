@@ -1,10 +1,8 @@
 name: Deploy to GitHub Pages
 
-# Live once Settings -> Pages -> Source is set to "GitHub Actions" (one-time,
-# manual — GitHub doesn't expose this toggle over git push or a public API token
-# scope we have). Until then this still only runs on manual dispatch below;
-# flip to `push: branches: [master]` once Pages is confirmed working.
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
 
 permissions:
