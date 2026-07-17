@@ -951,7 +951,7 @@ function renderFooter() {
 }
 
 /* ══ FEEDBACK ══ */
-const OWNER_UID = 'replace_with_your_supabase_uid'; // set this to your own Supabase auth.users id
+const OWNER_UID = '2b8a082b-9b99-42de-84f8-9a1603022bcd'; // Lok's Supabase auth.users id
 
 function showFeedback() {
   let el = document.getElementById('feedback-modal');
