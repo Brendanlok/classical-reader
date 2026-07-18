@@ -19,14 +19,17 @@ the "classical-reader" GCP project — console.cloud.google.com/apis/credentials
 No admin-level migration of old Firebase users was done: Supabase mints a new
 user id per Google account on first sign-in, so anyone who used the app before
 the migration lost their *cloud-synced* progress (local-device data untouched).
-OWNER_UID in app.js is your Supabase auth.users id (Dashboard → Authentication →
-Users) — gates the admin feedback tab.
+OWNER_UID in app.js is already set to Lok's Supabase auth.users id — if it ever
+needs changing, find the new id in Dashboard → Authentication → Users.
 
-Netlify gotcha, in case a fallback host is ever needed again: its GitHub
-connection can silently break (repo-access error) with every push failing
-invisibly — check the Deploys tab, don't assume `git push` succeeding means it
-went live. Also its dashboard "Publish directory" field can silently override
-netlify.toml if left stale from a prior repo layout.
+`netlify.toml` and `_headers` were deleted from the repo (Netlify reads neither
+now). The old chineseclassics.netlify.app site itself is disabled (not deleted)
+in the Netlify dashboard — a manual, reversible toggle, in case it's ever
+needed as a fallback host again. Netlify gotcha if it is ever brought back:
+its GitHub connection can silently break (repo-access error) with every push
+failing invisibly — check the Deploys tab, don't assume `git push` succeeding
+means it went live. Also its dashboard "Publish directory" field can silently
+override netlify.toml if left stale from a prior repo layout.
 
 manifest.json/sw.js use relative paths so they'd work at a root domain or a
 /classical-reader/ subpath without changes, if the host ever changes again.
@@ -77,11 +80,15 @@ notes/highlights, flashcards, quizzes, an AI chatbot, and a feedback form.
   must reach users immediately.
 
 ## Gotchas
-- OWNER_UID in app.js gates the admin feedback tab.
+- OWNER_UID in app.js gates the admin feedback tab (already set — see History).
 - Supabase RLS: chapter_cache/cache_meta/feedback are public r/w; user_data is
   gated to `auth.uid()::text = uid`. New tables need a policy in supabase-schema.sql
   (or run directly in SQL Editor) before the app can read/write them.
-- Groq API key in app.js powers only the chatbot/AI flashcards; translations use
-  free Google Translate (translate.googleapis.com, chunked ≤600 chars).
+- No API keys are hardcoded anywhere in the repo (repo is public — this must stay
+  true). Users paste their own Groq key for chatbot/AI flashcards; it's stored
+  only in their own localStorage, never sent anywhere but Groq's API.
+- Translations use free Google Translate (translate.googleapis.com, chunked
+  ≤600 chars) — no key needed for that path.
 - deploy.ps1 stages everything in this repo (git add .) and no-ops if nothing
-  changed — safe to call after every edit.
+  changed — safe to call after every edit. Pushing to master triggers GitHub
+  Pages' deploy.yml automatically.
