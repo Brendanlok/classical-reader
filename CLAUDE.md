@@ -1,39 +1,35 @@
 # classical-reader — 四大名著 reading app
-Live: https://chineseclassics.netlify.app (Netlify, auto-deploys on git push).
+Live: https://brendanlok.github.io/classical-reader/ (GitHub Pages, auto-deploys
+via .github/workflows/deploy.yml on push to master). Backend: Supabase only
+(Postgres + Auth). Netlify and Firebase are both fully retired — don't
+reintroduce either without asking; this was a deliberate migration off both.
 
-## Firebase → Supabase migration: DONE. Firebase is fully removed.
-Both stages complete — chapter_cache/feedback (Stage A) and auth/user_data
-(Stage B) all run on Supabase now. Firebase SDK script tags, FIREBASE_CONFIG,
-and all `_db`/`_auth`/`firebase.*` calls were deleted from index.html/user.js/
-app.js. Google sign-in goes through Supabase's OAuth (Authentication →
-Providers → Google in the Supabase dashboard, backed by a Google Cloud OAuth
-client under the "classical-reader" GCP project — console.cloud.google.com/
-apis/credentials). No admin-level migration of old Firebase users was done:
-Supabase mints a new user id per Google account on first sign-in, so returning
-users' old Firestore-era cloud data doesn't carry over (their local-device data
-is untouched). OWNER_UID in app.js is a placeholder needing your new Supabase
-uid — sign in once, find your id in Supabase Dashboard → Authentication →
-Users, paste it in.
+## History (context if something looks odd)
+Originally Netlify (static host) + Firebase (Auth/Firestore). Migrated in two
+stages: Firebase → Supabase first (chapter_cache/feedback, then auth/user_data),
+then Netlify → GitHub Pages. Repo had to go **public** to enable GitHub Pages on
+the free plan — a hardcoded Groq API key that was in the client JS (and thus
+already exposed via the live site regardless of repo visibility) was removed
+and revoked at console.groq.com as part of that switch; users now must paste
+their own key for AI chatbot/flashcard features.
 
-## GitHub Pages migration: still not done.
-Blocked on repo Settings → Pages → Source: "GitHub Actions" (manual toggle,
-not doable via git). Once done, flip .github/workflows/deploy.yml's `on:`
-back to `push: branches: [master]` and verify with curl before trusting
-brendanlok.github.io/classical-reader — it 404s until this is done. Whichever
-domain ends up live needs adding to Supabase → Authentication → URL
-Configuration → Redirect URLs, or sign-in breaks there.
+Google sign-in goes through Supabase's OAuth (Authentication → Providers →
+Google in the Supabase dashboard, backed by a Google Cloud OAuth client under
+the "classical-reader" GCP project — console.cloud.google.com/apis/credentials).
+No admin-level migration of old Firebase users was done: Supabase mints a new
+user id per Google account on first sign-in, so anyone who used the app before
+the migration lost their *cloud-synced* progress (local-device data untouched).
+OWNER_UID in app.js is your Supabase auth.users id (Dashboard → Authentication →
+Users) — gates the admin feedback tab.
 
-manifest.json/sw.js already use relative paths so they work at either a root
-domain or a /classical-reader/ subpath without changes.
+Netlify gotcha, in case a fallback host is ever needed again: its GitHub
+connection can silently break (repo-access error) with every push failing
+invisibly — check the Deploys tab, don't assume `git push` succeeding means it
+went live. Also its dashboard "Publish directory" field can silently override
+netlify.toml if left stale from a prior repo layout.
 
-## Netlify gotcha that cost real time (2026-07)
-Netlify's GitHub connection silently broke (repo-access error) for over a
-week and every push failed invisibly — check the Deploys tab occasionally,
-don't assume a push went live just because `git push` succeeded. Separately,
-`netlify.toml`'s `publish = "."` can conflict with a stale dashboard "Publish
-directory" field left over from when this was a subfolder of the ~/.claude
-monorepo — if deploys fail with "Deploy directory '...' does not exist",
-clear that dashboard field to `.` to match netlify.toml.
+manifest.json/sw.js use relative paths so they'd work at a root domain or a
+/classical-reader/ subpath without changes, if the host ever changes again.
 
 ## What it is
 Vanilla JS single-page app (no framework, no build step) for reading the Four Great
